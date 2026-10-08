@@ -3,6 +3,8 @@
 右侧栏文件树的**右键 →「添加到对话」**：把文件或文件夹作为 `@` 引用插进当前会话的
 输入框，支持多选批量插入。
 
+English: [README.en.md](README.en.md)。
+
 ```
 右键任意文件/文件夹  →  添加到对话        →  草稿里多出一枚 @path 引用
 ⌘/Ctrl+点击 多选     →  右键 → 添加所选 N 项
@@ -64,16 +66,17 @@
 
 ## 安装
 
+从市场 / GitHub 装：
+
+```sh
+dsh plugin --profile desktop add github:ruaibeite/dsh-files-to-chat
+```
+
+从本地目录装：
+
 ```sh
 ./install.sh                 # 装进 desktop profile（默认，也就是桌面 App 用的那个）
 PROFILE_NAME=web ./install.sh # 装进别的 profile
-```
-
-手工等价做法：
-
-```sh
-"/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh" \
-  plugin --profile desktop add /Users/ruaibeite/Desktop/dsh-files-to-chat
 ```
 
 装完**重启 Harness**（浏览器半边是随会话引导下发的，光刷新页面不够）。确认挂载：
