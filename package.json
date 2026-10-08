@@ -1,0 +1,59 @@
+{
+  "name": "@ruaibeite/dsh-files-to-chat",
+  "version": "0.1.0",
+  "description": "Right-click a file or folder in the DSH right Sidebar file tree to add it to the conversation as an @ reference, with multi-select batch insertion.",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./client/client.js"
+    }
+  },
+  "files": [
+    "lib/",
+    "client/",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ruaibeite/dsh-files-to-chat.git"
+  },
+  "homepage": "https://github.com/ruaibeite/dsh-files-to-chat#readme",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "sidebar",
+    "file-tree",
+    "context-menu",
+    "reference"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node test/mention.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-sidebar-files",
+        "@deepseek-ai/dsh-client-ui-primitives"
+      ]
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1 || >=4.0.5-alpha.1 <4.0.6"
+  }
+}

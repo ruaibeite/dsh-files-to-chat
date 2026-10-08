@@ -1,0 +1,13 @@
+# dsh bundle patch: inserts this plugin into a profile's layer stack.
+#
+# `dsh plugin --profile <name> add <package>` reconciles `dsh.profile.bundles`
+# against installed packages and, seeing this declaration, appends the package
+# to the bundle stack. The profile boot then merges THIS patch (a single
+# `insert` of the plugin row), so no profile file needs editing by hand.
+#
+# The browser half ships through package.json `exports["./client"]`, discovered
+# through the `dsh.client` declaration; this host row exists so the plugin has a
+# Loader identity at all.
+- insert:
+    - id: files-to-chat
+      name: '@ruaibeite/dsh-files-to-chat'
