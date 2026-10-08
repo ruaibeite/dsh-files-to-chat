@@ -23,17 +23,24 @@
  *
  * ## 插入走官方通道，按可用性降级
  *
- * - 首选 Conversation 在 Session 作用域上监听的 `slash/input-insert-reference`
- *   事件（`ctx.sessions.scope(sessionId).bail(...)`）。这是 `@` 补全菜单 pick 的
- *   同一条路径，载荷形状与 `ui-reference` 的 pick 产物一致，因此得到的是**真正的
- *   原子引用 chip**：图标、整块删除、剪贴板投影都由官方负责。
- * - 事件通道不可用时降级为 `inputActions.insertText(mention, span)`，插入纯文本
- *   `@path`。这条通道是官方 Voice Input 插件正在用的公开面；按
- *   `dsh-file-reference` 的说明，`@path` 本身就是引用的序列化形式，两种形式在模型
- *   侧语义相同（引用**不会**附带文件内容，模型仍要用文件工具去读）。
+ * 输入面有两条互为备份的发现路径：框架交给 Session 作用域组件的标准 prop
+ * `inputActions`；它缺席时退回 `ctx.sessions.scope(sessionId).get('conversation')
+ * .input.for(scope)`——那就是输入机本身，`slash/input-insert-reference` 的监听器调用
+ * 的同一个对象（见 `resolvePort`）。
  *
- * 两条通道都用 `inputActions.captureInsertion()` 的 `draftRev` 做 CAS：插入期间
- * 用户改了草稿就失败，此时把引用文本复制到剪贴板并提示，而不是静默丢掉。
+ * 引用形态同样逐级降级：
+ *
+ * - 直连输入机的 `insertReference`，或官方在 Session 作用域上监听的
+ *   `slash/input-insert-reference` 事件（`@` 补全菜单 pick 的同一条路径）。载荷形状
+ *   与 `ui-reference` 的 pick 产物一致，因此得到的是**真正的原子引用 chip**：图标、
+ *   整块删除、剪贴板投影都由官方负责。
+ * - 两者都不可用时插入纯文本 `@path`（`inputActions.insertText(mention, span)`，官方
+ *   Voice Input 插件正在用的公开面）。按 `dsh-file-reference` 的说明，`@path` 本身
+ *   就是引用的序列化形式，两种形态在模型侧语义相同（引用**不会**附带文件内容，模型
+ *   仍要用文件工具去读）。
+ *
+ * 每条引用都用 `captureInsertion()` 的 `draftRev` 做 CAS：插入期间用户改了草稿就失败，
+ * 此时把剩余的引用文本复制到剪贴板并提示，而不是静默丢掉。
  *
  * 本文件是**手写的**预构建客户端入口，不需要任何打包步骤：浏览器端
  * `__ModuleLoader__` 会执行它，工厂函数拿到宿主的 `require`（React、react-dom 与
