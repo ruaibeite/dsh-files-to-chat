@@ -55,14 +55,6 @@ window.__ModuleLoader__.load({
     const React = require('react');
     const ReactDOM = require('react-dom');
 
-    /** 官方基础组件：只借 MenuSurface（原生菜单材质）；缺失也不致命。 */
-    let primitives = {};
-    try {
-      primitives = require('@deepseek-ai/dsh-client-ui-primitives') ?? {};
-    } catch (error) {
-      primitives = {};
-    }
-
     /** Stable Loader/module identity. */
     const name = 'files-to-chat';
     /** 本插件拥有的 locale 命名空间。 */
@@ -397,7 +389,9 @@ window.__ModuleLoader__.load({
       const extra = key === 'menu.hint' ? { modifier: MODIFIER, ...params } : params;
       if (typeof rawT === 'function') {
         try {
-          const text = rawT(key, params);
+          // 注意传 `extra` 而不是 `params`：框架的 `t` 只替换它收到的参数，
+          // 把内部补的 `modifier` 漏在外面就会把 `{modifier}` 原样画到界面上。
+          const text = rawT(key, extra);
           if (typeof text === 'string' && text !== key) return text;
         } catch (error) {
           // 交给兜底表
@@ -418,20 +412,37 @@ window.__ModuleLoader__.load({
       '.dsh-ftc-chip:hover{color:var(--dsw-alias-label-primary);filter:brightness(1.06)}',
       '.dsh-ftc-chip-clear{display:inline-flex;align-items:center;justify-content:center;width:20px;height:26px;padding:0;border:0;border-radius:var(--dsw-radius-sm,6px);background:transparent;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:12px;line-height:1;cursor:pointer}',
       '.dsh-ftc-chip-clear:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}',
-      /* 右键菜单（表面材质由 primitives 的 MenuSurface 提供）。 */
-      '.dsh-ftc-menu{position:fixed;z-index:4000;min-width:248px;max-width:360px;padding:4px}',
+      /*
+       * 右键菜单：自绘的不透明卡片。
+       *
+       * 不借用 primitives 的 MenuSurface：它的材质是半透明填充
+       * （--dsw-menu-surface-fill）+ backdrop-filter，只有靠 macOS 的**不透明衬底**
+       * （.backing，用 CSS anchor 定位、放在 body 的 isolation 里、z-index -1、垫在整页
+       * 内容之下）才不透视。本插件把菜单 portal 到 body 时衬底会落到菜单之上，结果就是
+       * 菜单看起来「没在最上层」——页面内容从菜单里透出来。这里直接用主题的层级底色画
+       * 一张不透明卡片，并把层级提到官方 portal 菜单（z 1100）之上。
+       */
+      '.dsh-ftc-menu{position:fixed;z-index:1200;box-sizing:border-box;min-width:248px;max-width:360px;padding:4px;border-radius:var(--dsw-radius-lg,10px);background:var(--dsw-alias-bg-layer-3,var(--dsw-alias-bg-base,#2b2d31));--dsw-elevation-stroke-color:var(--dsw-alias-border-l1,var(--dsw-alias-border-l3,rgba(255,255,255,.12)));box-shadow:var(--dsw-elevation-prominent,0 6px 24px rgba(0,0,0,.28))}',
       '.dsh-ftc-item{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;padding:6px 10px;border:0;border-radius:var(--dsw-radius-md,8px);background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;line-height:1.4;text-align:left;cursor:pointer}',
       '.dsh-ftc-item:hover,.dsh-ftc-item-active{background:var(--dsw-alias-interactive-bg-hover)}',
       '.dsh-ftc-item:disabled{cursor:default;color:var(--dsw-alias-label-tertiary)}',
       '.dsh-ftc-item:disabled:hover{background:transparent}',
       '.dsh-ftc-item-hint{flex:none;color:var(--dsw-alias-label-tertiary);font-size:12px}',
       /* 提示条。 */
-      '.dsh-ftc-toast{position:fixed;right:16px;bottom:16px;z-index:4000;max-width:340px;padding:8px 12px;border:1px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-md,8px);background:var(--dsw-alias-bg-elevated,var(--dsw-alias-interactive-bg-hover,rgba(40,40,40,.94)));color:var(--dsw-alias-label-primary);font-size:13px;line-height:1.5;box-shadow:0 6px 24px rgba(0,0,0,.28);pointer-events:none}'
+      '.dsh-ftc-toast{position:fixed;right:16px;bottom:16px;z-index:1200;max-width:340px;padding:8px 12px;border:1px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-md,8px);background:var(--dsw-alias-bg-layer-3,var(--dsw-alias-bg-base,#2b2d31));color:var(--dsw-alias-label-primary);font-size:13px;line-height:1.5;box-shadow:var(--dsw-elevation-prominent,0 6px 24px rgba(0,0,0,.28));pointer-events:none}'
     ].join('\n');
 
-    /** 每页注入一次样式表。 */
+    /**
+     * 注入样式表：同一页只保留一张，且每次加载都换成当前这份。
+     *
+     * 后半句是必须的——客户端插件被 HMR 重载时（改文件即可触发），上一代模块留下的
+     * 样式表还在 head 里；若此时直接 return，旧规则会继续生效，样式改动要刷新整页才
+     * 看得见。先摘掉旧的再挂新的，规则集始终等于这份代码。
+     */
     function ensureStyle() {
-      if (typeof document === 'undefined' || document.getElementById(STYLE_ID) !== null) return;
+      if (typeof document === 'undefined') return;
+      const existing = document.getElementById(STYLE_ID);
+      if (existing !== null) existing.remove();
       const style = document.createElement('style');
       style.id = STYLE_ID;
       style.textContent = CSS;
@@ -729,17 +740,16 @@ window.__ModuleLoader__.load({
         }, '×')
       ]);
 
-      const Surface = typeof primitives.MenuSurface === 'function' ? primitives.MenuSurface : 'div';
       const menuNode = menu === null ? null : (() => {
         const items = itemsOf(menu.targets);
         const left = Math.max(8, Math.min(menu.x, (globalThis.innerWidth ?? 0) - MENU_WIDTH - 8));
         const top = Math.max(8, Math.min(menu.y, (globalThis.innerHeight ?? 0) - items.length * ITEM_HEIGHT - 16));
-        return ReactDOM.createPortal(React.createElement(Surface, {
+        return ReactDOM.createPortal(React.createElement('div', {
           ref: menuNodeRef,
           className: 'dsh-ftc-menu',
           role: 'menu',
           'data-files-to-chat-menu': true,
-          style: { position: 'fixed', left, top, zIndex: 4000 }
+          style: { position: 'fixed', left, top, zIndex: 1200 }
         }, items.map((item, index) => React.createElement('button', {
           key: item.id,
           type: 'button',
@@ -806,7 +816,7 @@ window.__ModuleLoader__.load({
     exports.inject = inject;
     exports.name = name;
     /** 给 node 侧测试用的纯函数出口（浏览器里无人读它）。 */
-    exports.__test = { pathBasename, relativizeToCwd, formatFileMention, buildReference, buildReferences, interpolate };
+    exports.__test = { pathBasename, relativizeToCwd, formatFileMention, buildReference, buildReferences, interpolate, translate, MODIFIER };
     return module.exports;
   }
 });

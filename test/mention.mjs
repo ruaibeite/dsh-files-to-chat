@@ -40,7 +40,7 @@ const plugin = entry.factory(requireStub);
 assert.equal(typeof plugin.apply, 'function', 'apply 是插件的挂载入口');
 assert.deepEqual(plugin.inject, ['slots'], '只注入插槽注册表');
 
-const { pathBasename, relativizeToCwd, formatFileMention, buildReference, buildReferences, interpolate } = plugin.__test;
+const { pathBasename, relativizeToCwd, formatFileMention, buildReference, buildReferences, interpolate, translate, MODIFIER } = plugin.__test;
 
 const CWD = '/Users/ruaibeite/Desktop';
 
@@ -103,6 +103,25 @@ assert.deepEqual(batch.map((reference) => reference.clipboardText), [
 // ── interpolate ─────────────────────────────────────────────────────────────
 assert.equal(interpolate('已添加 {count} 项', { count: 3 }), '已添加 3 项');
 assert.equal(interpolate('保留 {missing}', { count: 1 }), '保留 {missing}');
+
+// ── translate：框架的 t 只替换它收到的参数 ──────────────────────────────────
+/** 模仿框架 `t`：用收到的参数替换 `{name}`，没有对应参数就原样留下。 */
+const frameworkT = (key, params) => {
+  const table = { 'menu.hint': '{modifier}+点击多选，Shift+点击连选', 'menu.add': '添加到对话' };
+  const template = table[key];
+  if (template === undefined) return key;
+  return template.replace(/\{(\w+)\}/gu, (match, name) => (params !== undefined && name in params ? String(params[name]) : match));
+};
+
+// 回归：`menu.hint` 的 modifier 是本插件内部补的，必须一起交给框架的 t，
+// 否则界面上会原样显示 `{modifier}`（线上就是这么出的）。
+assert.equal(translate(frameworkT, 'menu.hint'), `${MODIFIER}+点击多选，Shift+点击连选`);
+assert.ok(!translate(frameworkT, 'menu.hint').includes('{modifier}'), '不能把占位符画到界面上');
+assert.equal(translate(frameworkT, 'menu.add'), '添加到对话');
+// 框架 t 缺席或返回键名时，退回自带中文表并且同样完成插值
+assert.equal(translate(undefined, 'menu.addMany', { count: 2 }), '添加所选 2 项到对话');
+assert.equal(translate((key) => key, 'menu.addMany', { count: 2 }), '添加所选 2 项到对话');
+assert.ok(!translate(undefined, 'menu.hint').includes('{modifier}'));
 
 // ── apply：插槽注册 ─────────────────────────────────────────────────────────
 /** 造一个够用的客户端根上下文；`sessions` 按用例注入。 */
