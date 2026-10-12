@@ -15,16 +15,23 @@ right-click any file / folder  →  Add to conversation   →  an @path referenc
 
 | Action | Result |
 | --- | --- |
-| Right-click a file row | Menu: "Add to conversation" / "Copy path" |
-| Right-click a folder row | Same, inserting a `@dir/` reference |
+| Right-click a file row | Menu: "Add to conversation" / "Open with default app" / "Show in file manager" / "Copy path" |
+| Right-click a folder row | Same, inserting a `@dir/` reference; the open items become "Open folder" / "Reveal in parent folder" |
 | ⌘/Ctrl + click | Add/remove that row from the selection (does not open the file) |
 | Shift + click | Select the range from the last pick |
-| Right-click inside a selection | Menu becomes "Add N selected to conversation" |
+| Right-click inside a selection | Menu becomes "Add N selected to conversation" + "Copy N paths" |
 | Header chip | Appears in the file-tree header while a selection exists; `×` clears it |
 | Escape | Close the menu; with no menu open, clear the selection |
 
 A plain click keeps the file tree's own behaviour exactly (open a file, expand a folder) and
 only clears the selection.
+
+"Open" and "Show in file manager" go through the **official open-in-app host capability** — the
+same `session` remote namespace the official "Open In…" button in the file-tree header uses — so
+the plugin never spawns a shell itself. The capability is probed with `canOpenWorkspacePath()` and
+**the whole group is hidden** where it answers false (a plain browser profile), rather than
+offering two items that are guaranteed to fail. Opening is not offered for a multi-selection:
+launching N applications at once is not a feature.
 
 ## What gets inserted
 
@@ -102,6 +109,10 @@ dsh --profile desktop --dump-config | grep -A2 files-to-chat
   tree or changing session clears it. That is deliberate — it is not the file tree's state and
   no other entry point can mutate it.
 - A folder reference inserts `@dir/` only; it is not expanded into the files underneath.
+- "Open" and "Show in file manager" appear only on a host that can open natively (the desktop
+  app); a plain browser profile hides the whole group. Whether a given path can be opened also
+  depends on the host mapping it to the same canonical process path — a path it cannot map (a
+  remote one, say) is refused, and the plugin reports a failure instead of pretending.
 - The plugin depends on the official row DOM contract (`data-files-entry` / `data-files-path` /
   `data-files-root`). If DSH renames those attributes the menu silently stops appearing rather
   than doing anything unexpected.
@@ -109,8 +120,9 @@ dsh --profile desktop --dump-config | grep -A2 files-to-chat
 ## Development
 
 ```sh
-node test/mention.mjs   # pure functions: path relativization, @ syntax, batch building,
-                        # both insertion routes and the clipboard degradation
+node test/mention.mjs   # pure functions: path relativization, @ syntax, batch building, both
+                        # insertion routes, the clipboard degradation, and the native-open
+                        # request/envelope contract
 ```
 
 `client/client.js` is a **hand-written** prebuilt client entry (`window.__ModuleLoader__.load`)

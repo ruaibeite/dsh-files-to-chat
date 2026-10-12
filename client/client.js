@@ -63,7 +63,7 @@ window.__ModuleLoader__.load({
      * 客户端服务：只需要插槽注册表。`sessions` / `locale` 都在用到时经 `ctx.get`
      * 惰性读取，免得给加载顺序增加无谓的约束。
      */
-    const inject = ['slots'];
+    const inject = ['slots', 'remote'];
 
     /** 注入样式表的 id（每页一张）。 */
     const STYLE_ID = 'dsh-files-to-chat-style';
@@ -71,6 +71,8 @@ window.__ModuleLoader__.load({
     const MENU_WIDTH = 268;
     /** 菜单行高，用于估算高度并贴边收拢。 */
     const ITEM_HEIGHT = 30;
+    /** 分组细线的占位高度（含上下外边距），同样用于贴边收拢。 */
+    const SEPARATOR_HEIGHT = 9;
 
     //#region 纯函数：路径与 `@` 引用语法
     /**
@@ -326,11 +328,81 @@ window.__ModuleLoader__.load({
     }
     //#endregion
 
+    //#region 原生打开（借官方 open-in-app 宿主能力）
+    /**
+     * 组装 `session.openWorkspacePath` 的请求体。
+     *
+     * **省略 `action`** 就是「按文件类型关联打开」（默认应用），显式 `reveal` 才是
+     * 「在文件管理器中显示」——这与官方客户端 `OpenInAppPathController` 的两种请求
+     * 逐字一致（见 `dsh-api-session-controller` 的说明：省略 action 时按关联打开，
+     * reveal 把文件管理器导航交给原生适配器）。
+     * @param path - 目标的绝对路径。
+     * @param action - `open`（默认应用）或 `reveal`（文件管理器）。
+     * @returns 远程请求体。
+     */
+    function openRequest(path, action) {
+      return action === 'reveal' ? { path, action: 'reveal' } : { path };
+    }
+
+    /**
+     * 解析 session 远程命名空间。缺 Remote 服务、或运行在纯浏览器 profile 时返回
+     * undefined —— 调用方据此整组隐藏「打开」类菜单项。
+     * @param ctx - 客户端根上下文。
+     * @returns `remote.session` 命名空间，或 undefined。
+     */
+    function openRemote(ctx) {
+      try {
+        const remote = ctx.get('remote');
+        return remote === undefined || remote === null ? undefined : remote.session;
+      } catch (error) {
+        return undefined;
+      }
+    }
+
+    /**
+     * 这台主机能否执行原生打开。`canOpenWorkspacePath()` 无需指定 Session，所以插件
+     * 挂载时问一次即可；桌面宿主之外（纯浏览器）回答 false。
+     * @param session - `remote.session` 命名空间。
+     * @returns 是否具备原生打开能力。
+     */
+    async function canOpenNatively(session) {
+      if (session === undefined || typeof session.canOpenWorkspacePath !== 'function') return false;
+      try {
+        const result = await session.canOpenWorkspacePath();
+        return result !== undefined && result !== null && result.ok === true && result.value === true;
+      } catch (error) {
+        return false;
+      }
+    }
+
+    /**
+     * 执行一次原生打开或在文件管理器中显示。
+     * @param session - `remote.session` 命名空间。
+     * @param path - 目标的绝对路径。
+     * @param action - `open` 或 `reveal`。
+     * @returns 宿主是否接受并执行。
+     */
+    async function openNatively(session, path, action) {
+      if (session === undefined || typeof session.openWorkspacePath !== 'function') return false;
+      try {
+        const result = await session.openWorkspacePath(openRequest(path, action));
+        return result !== undefined && result !== null && result.ok === true;
+      } catch (error) {
+        return false;
+      }
+    }
+    //#endregion
+
     //#region 文案
     const zh = {
       'menu.add': '添加到对话',
       'menu.addMany': '添加所选 {count} 项到对话',
       'menu.copy': '复制路径',
+      'menu.copyMany': '复制 {count} 条路径',
+      'menu.open': '用默认应用打开',
+      'menu.openFolder': '打开文件夹',
+      'menu.reveal': '在文件管理器中显示',
+      'menu.revealFolder': '在上级目录中显示',
       'menu.hint': '{modifier}+点击多选，Shift+点击连选',
       'menu.folder': '文件夹',
       'menu.file': '文件',
@@ -340,6 +412,9 @@ window.__ModuleLoader__.load({
       'toast.added': '已添加 {count} 项引用到对话',
       'toast.copied': '输入框正忙，引用已复制到剪贴板',
       'toast.copiedPath': '路径已复制',
+      'toast.copiedMany': '已复制 {count} 条路径',
+      'toast.openFailed': '打开失败：这台主机没有可用的原生打开能力',
+      'toast.revealFailed': '无法在文件管理器中显示该路径',
       'toast.failed': '添加失败：无法写入输入框',
       'toast.empty': '这些条目无法表示成 @ 引用'
     };
@@ -347,6 +422,11 @@ window.__ModuleLoader__.load({
       'menu.add': 'Add to conversation',
       'menu.addMany': 'Add {count} selected to conversation',
       'menu.copy': 'Copy path',
+      'menu.copyMany': 'Copy {count} paths',
+      'menu.open': 'Open with default app',
+      'menu.openFolder': 'Open folder',
+      'menu.reveal': 'Show in file manager',
+      'menu.revealFolder': 'Reveal in parent folder',
       'menu.hint': '{modifier}+click to multi-select, Shift+click for a range',
       'menu.folder': 'Folder',
       'menu.file': 'File',
@@ -356,6 +436,9 @@ window.__ModuleLoader__.load({
       'toast.added': 'Added {count} reference(s) to the conversation',
       'toast.copied': 'Composer is busy — references copied to the clipboard',
       'toast.copiedPath': 'Path copied',
+      'toast.copiedMany': 'Copied {count} paths',
+      'toast.openFailed': 'Could not open: this host offers no native opener',
+      'toast.revealFailed': 'Could not show that path in the file manager',
       'toast.failed': 'Could not write into the composer',
       'toast.empty': 'These entries cannot be written as @ references'
     };
@@ -428,6 +511,8 @@ window.__ModuleLoader__.load({
       '.dsh-ftc-item:disabled{cursor:default;color:var(--dsw-alias-label-tertiary)}',
       '.dsh-ftc-item:disabled:hover{background:transparent}',
       '.dsh-ftc-item-hint{flex:none;color:var(--dsw-alias-label-tertiary);font-size:12px}',
+      /* 分组细线（官方菜单卡片用同一种 l2 边框）。 */
+      '.dsh-ftc-separator{height:0;margin:4px 8px;border-top:.5px solid var(--dsw-alias-border-l2,var(--dsw-alias-border-l3,rgba(127,127,127,.3)))}',
       /* 提示条。 */
       '.dsh-ftc-toast{position:fixed;right:16px;bottom:16px;z-index:1200;max-width:340px;padding:8px 12px;border:1px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-md,8px);background:var(--dsw-alias-bg-layer-3,var(--dsw-alias-bg-base,#2b2d31));color:var(--dsw-alias-label-primary);font-size:13px;line-height:1.5;box-shadow:var(--dsw-elevation-prominent,0 6px 24px rgba(0,0,0,.28));pointer-events:none}'
     ].join('\n');
@@ -466,11 +551,38 @@ window.__ModuleLoader__.load({
       const t = React.useCallback((key, params) => translate(rawT, key, params), [rawT]);
       const sessionId = props.sessionId;
       const insert = props.insertReferences;
+      const canOpen = props.canOpenNatively;
+      const openWithSystem = props.openNatively;
       const cwd = typeof props.absolutePath === 'string' ? props.absolutePath : undefined;
 
       const [selection, setSelection] = React.useState([]);
       const [menu, setMenu] = React.useState(null);
       const [toast, setToast] = React.useState(null);
+      /**
+       * 这台主机有没有原生打开能力（桌面宿主才有）。
+       *
+       * `canOpenWorkspacePath()` 不需要 Session，所以挂载时问一次；回答 false
+       * （纯浏览器 profile）就整组隐藏「打开 / 在文件管理器中显示」，而不是给两个
+       * 点了必然失败的菜单项。
+       */
+      const [nativeOpen, setNativeOpen] = React.useState(false);
+      React.useEffect(() => {
+        if (typeof canOpen !== 'function') {
+          setNativeOpen(false);
+          return undefined;
+        }
+        let live = true;
+        Promise.resolve()
+          .then(() => canOpen())
+          .then((ok) => {
+            if (live) setNativeOpen(ok === true);
+          }, () => {
+            if (live) setNativeOpen(false);
+          });
+        return () => {
+          live = false;
+        };
+      }, [canOpen]);
       const anchorRef = React.useRef(null);
       const menuNodeRef = React.useRef(null);
       const toastTimerRef = React.useRef(null);
@@ -589,22 +701,78 @@ window.__ModuleLoader__.load({
         showToast(copyText(target.path) ? t('toast.copiedPath') : t('toast.failed'));
       }, [showToast, t]);
 
-      /** 菜单条目：多选时是单条批量动作，单选时另有复制路径。 */
+      /** 复制多选的绝对路径（一行一条）。 */
+      const runCopyMany = React.useCallback((targets) => {
+        setMenu(null);
+        const text = targets.map((target) => target.path).join('\n');
+        showToast(copyText(text) ? t('toast.copiedMany', { count: targets.length }) : t('toast.failed'));
+      }, [showToast, t]);
+
+      /**
+       * 交给系统：`open` 按文件类型关联打开，`reveal` 在文件管理器中显示。
+       * 两条都由官方 open-in-app 宿主适配器执行，插件不自带 shell 调用。
+       */
+      const runSystem = React.useCallback(async (target, action) => {
+        setMenu(null);
+        let ok = false;
+        if (typeof openWithSystem === 'function') {
+          try {
+            ok = (await openWithSystem(target.path, action)) === true;
+          } catch (error) {
+            ok = false;
+          }
+        }
+        if (!ok) showToast(t(action === 'reveal' ? 'toast.revealFailed' : 'toast.openFailed'));
+      }, [openWithSystem, showToast, t]);
+
+      /**
+       * 菜单条目：首条永远是「添加到对话」，多选时合成一条批量动作；
+       * 单选且主机支持原生打开时插入「打开 / 在文件管理器中显示」一组；最后是复制路径。
+       */
       const itemsOf = React.useCallback((targets) => {
-        const items = targets.length > 1
-          ? [{ id: 'add', label: t('menu.addMany', { count: targets.length }), run: () => runInsert(targets) }]
-          : [
-            { id: 'add', label: t('menu.add'), hint: targets[0].kind === 'directory' ? t('menu.folder') : t('menu.file'), run: () => runInsert(targets) },
-            { id: 'copy', label: t('menu.copy'), run: () => runCopy(targets[0]) }
-          ];
+        const many = targets.length > 1;
+        const first = targets[0];
+        const directory = first.kind === 'directory';
+        const items = [];
+        items.push(many
+          ? { id: 'add', label: t('menu.addMany', { count: targets.length }), run: () => runInsert(targets) }
+          : {
+            id: 'add',
+            label: t('menu.add'),
+            hint: directory ? t('menu.folder') : t('menu.file'),
+            run: () => runInsert(targets)
+          });
+        if (nativeOpen && !many && typeof openWithSystem === 'function') {
+          items.push({
+            id: 'open',
+            separatorBefore: true,
+            label: directory ? t('menu.openFolder') : t('menu.open'),
+            run: () => runSystem(first, 'open')
+          });
+          items.push({
+            id: 'reveal',
+            label: directory ? t('menu.revealFolder') : t('menu.reveal'),
+            run: () => runSystem(first, 'reveal')
+          });
+        }
+        items.push(many
+          ? { id: 'copy', separatorBefore: true, label: t('menu.copyMany', { count: targets.length }), run: () => runCopyMany(targets) }
+          : { id: 'copy', separatorBefore: true, label: t('menu.copy'), run: () => runCopy(first) });
         items.push({ id: 'hint', label: t('menu.hint'), enabled: false });
         return items;
-      }, [runCopy, runInsert, t]);
+      }, [nativeOpen, openWithSystem, runCopy, runCopyMany, runInsert, runSystem, t]);
 
-      /** 菜单与提示条出现的坐标/内容。 */
+      /** 执行菜单项：动作可能是异步的，失败也不该把菜单一起炸掉。 */
       const activate = React.useCallback((item) => {
         setMenu(null);
-        item.run();
+        try {
+          const outcome = item.run();
+          if (outcome !== undefined && outcome !== null && typeof outcome.then === 'function') {
+            outcome.then(undefined, () => {});
+          }
+        } catch (error) {
+          // 单个动作的失败已经由动作自己提示
+        }
       }, []);
 
       React.useEffect(() => {
@@ -742,33 +910,41 @@ window.__ModuleLoader__.load({
 
       const menuNode = menu === null ? null : (() => {
         const items = itemsOf(menu.targets);
+        const rows = items.length * ITEM_HEIGHT + items.filter((item) => item.separatorBefore === true).length * SEPARATOR_HEIGHT;
         const left = Math.max(8, Math.min(menu.x, (globalThis.innerWidth ?? 0) - MENU_WIDTH - 8));
-        const top = Math.max(8, Math.min(menu.y, (globalThis.innerHeight ?? 0) - items.length * ITEM_HEIGHT - 16));
+        const top = Math.max(8, Math.min(menu.y, (globalThis.innerHeight ?? 0) - rows - 16));
         return ReactDOM.createPortal(React.createElement('div', {
           ref: menuNodeRef,
           className: 'dsh-ftc-menu',
           role: 'menu',
           'data-files-to-chat-menu': true,
           style: { position: 'fixed', left, top, zIndex: 1200 }
-        }, items.map((item, index) => React.createElement('button', {
-          key: item.id,
-          type: 'button',
-          role: 'menuitem',
-          disabled: item.enabled === false,
-          className: index === menu.active ? 'dsh-ftc-item dsh-ftc-item-active' : 'dsh-ftc-item',
-          onMouseEnter: () => setMenu((current) => (current === null ? current : { ...current, active: index })),
-          onMouseDown: (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-          },
-          onClick: (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            activate(item);
-          }
+        }, items.map((item, index) => React.createElement(React.Fragment, {
+          key: item.id
         }, [
-          React.createElement('span', { key: 'label' }, item.label),
-          item.hint === undefined ? null : React.createElement('span', { key: 'hint', className: 'dsh-ftc-item-hint' }, item.hint)
+          item.separatorBefore === true
+            ? React.createElement('div', { key: 'separator', className: 'dsh-ftc-separator', role: 'separator' })
+            : null,
+          React.createElement('button', {
+            key: 'item',
+            type: 'button',
+            role: 'menuitem',
+            disabled: item.enabled === false,
+            className: index === menu.active ? 'dsh-ftc-item dsh-ftc-item-active' : 'dsh-ftc-item',
+            onMouseEnter: () => setMenu((current) => (current === null ? current : { ...current, active: index })),
+            onMouseDown: (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            },
+            onClick: (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              activate(item);
+            }
+          }, [
+            React.createElement('span', { key: 'label' }, item.label),
+            item.hint === undefined ? null : React.createElement('span', { key: 'hint', className: 'dsh-ftc-item-hint' }, item.hint)
+          ])
         ]))), document.body);
       })();
 
@@ -801,13 +977,22 @@ window.__ModuleLoader__.load({
       if (locale !== undefined && typeof locale.register === 'function') {
         ctx.effect(() => locale.register(NS, { zh, en }), 'files-to-chat: dictionaries');
       }
+      /**
+       * 官方 open-in-app 的 session 远程命名空间。`remote` 已声明在 `inject` 里，
+       * 所以挂载时服务已在位；这里仍然**每次调用现取**，免得服务被替换后一直用旧的
+       * （也顺手兜住 `remote` 缺失的情形——那时两个函数恒答 false，组件据此隐藏
+       * 「打开」类菜单项，而不是给两个点了必然失败的条目）。
+       */
+      const sessionOf = () => openRemote(ctx);
       ctx.slots.inject('sidebar.right.tab.files.actions', () => ctx.slots.register({
         name: 'sidebar.right.tab.files.actions',
         id: 'files-to-chat',
         order: 40,
         locale: NS,
         inject: () => ({
-          insertReferences: (sessionId, references, inputActions) => insertReferences(ctx, sessionId, references, inputActions)
+          insertReferences: (sessionId, references, inputActions) => insertReferences(ctx, sessionId, references, inputActions),
+          canOpenNatively: () => canOpenNatively(sessionOf()),
+          openNatively: (path, action) => openNatively(sessionOf(), path, action)
         })
       }, FilesToChat));
     }
@@ -816,7 +1001,7 @@ window.__ModuleLoader__.load({
     exports.inject = inject;
     exports.name = name;
     /** 给 node 侧测试用的纯函数出口（浏览器里无人读它）。 */
-    exports.__test = { pathBasename, relativizeToCwd, formatFileMention, buildReference, buildReferences, interpolate, translate, MODIFIER };
+    exports.__test = { pathBasename, relativizeToCwd, formatFileMention, buildReference, buildReferences, interpolate, translate, openRequest, canOpenNatively, openNatively, MODIFIER };
     return module.exports;
   }
 });

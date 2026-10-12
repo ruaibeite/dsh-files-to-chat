@@ -38,9 +38,9 @@ assert.equal(entry.id, '@ruaibeite/dsh-files-to-chat');
 
 const plugin = entry.factory(requireStub);
 assert.equal(typeof plugin.apply, 'function', 'apply 是插件的挂载入口');
-assert.deepEqual(plugin.inject, ['slots'], '只注入插槽注册表');
+assert.deepEqual(plugin.inject, ['slots', 'remote'], '注入插槽注册表与 remote 服务');
 
-const { pathBasename, relativizeToCwd, formatFileMention, buildReference, buildReferences, interpolate, translate, MODIFIER } = plugin.__test;
+const { pathBasename, relativizeToCwd, formatFileMention, buildReference, buildReferences, interpolate, translate, openRequest, canOpenNatively, openNatively, MODIFIER } = plugin.__test;
 
 const CWD = '/Users/ruaibeite/Desktop';
 
@@ -123,13 +123,46 @@ assert.equal(translate(undefined, 'menu.addMany', { count: 2 }), '添加所选 2
 assert.equal(translate((key) => key, 'menu.addMany', { count: 2 }), '添加所选 2 项到对话');
 assert.ok(!translate(undefined, 'menu.hint').includes('{modifier}'));
 
+// ── 原生打开：请求体与响应信封 ──────────────────────────────────────────────
+// 省略 action = 按文件类型关联打开；显式 reveal = 文件管理器导航。
+// 这两个形状必须与官方 OpenInAppPathController 一致，否则宿主会拒绝。
+assert.deepEqual(openRequest('/w/a.ts', 'open'), { path: '/w/a.ts' });
+assert.deepEqual(openRequest('/w/a.ts', 'reveal'), { path: '/w/a.ts', action: 'reveal' });
+assert.ok(!('action' in openRequest('/w/a.ts', 'open')), 'open 不能带 action 字段');
+
+// 能力探测：只有 {ok:true, value:true} 才算有原生打开能力
+await (async () => {
+  assert.equal(await canOpenNatively(undefined), false);
+  assert.equal(await canOpenNatively({}), false);
+  assert.equal(await canOpenNatively({ canOpenWorkspacePath: async () => ({ ok: true, value: true }) }), true);
+  assert.equal(await canOpenNatively({ canOpenWorkspacePath: async () => ({ ok: true, value: false }) }), false);
+  assert.equal(await canOpenNatively({ canOpenWorkspacePath: async () => ({ ok: false, error: {} }) }), false);
+  assert.equal(await canOpenNatively({ canOpenWorkspacePath: async () => { throw new Error('boom'); } }), false);
+
+  // 执行：请求体必须原样到达宿主，失败（拒绝 / 抛错 / 无能力）一律回答 false
+  const seen = [];
+  const session = {
+    openWorkspacePath: async (request) => {
+      seen.push(request);
+      return { ok: true, value: null };
+    }
+  };
+  assert.equal(await openNatively(session, '/w/dir', 'reveal'), true);
+  assert.equal(await openNatively(session, '/w/a.ts', 'open'), true);
+  assert.deepEqual(seen, [{ path: '/w/dir', action: 'reveal' }, { path: '/w/a.ts' }]);
+  assert.equal(await openNatively(undefined, '/w/a.ts', 'open'), false);
+  assert.equal(await openNatively({ openWorkspacePath: async () => ({ ok: false, error: {} }) }, '/w/a.ts', 'open'), false);
+  assert.equal(await openNatively({ openWorkspacePath: async () => { throw new Error('nope'); } }, '/w/a.ts', 'open'), false);
+})();
+
 // ── apply：插槽注册 ─────────────────────────────────────────────────────────
-/** 造一个够用的客户端根上下文；`sessions` 按用例注入。 */
-function makeCtx({ scoped } = {}) {
+/** 造一个够用的客户端根上下文；`sessions` / `remote` 按用例注入。 */
+function makeCtx({ scoped, remote } = {}) {
   const state = { injectedInto: null, definitions: [], components: [], effects: 0 };
   const ctx = {
     get: (name) => {
       if (name === 'locale') return { register: () => {} };
+      if (name === 'remote') return remote;
       if (name === 'sessions') return scoped === undefined ? undefined : { scope: () => scoped };
       return undefined;
     },
@@ -161,6 +194,30 @@ assert.equal(first.state.definitions[0].locale, 'filesToChat');
 assert.equal(typeof first.state.components[0], 'function');
 const face = first.state.definitions[0].inject();
 assert.equal(typeof face.insertReferences, 'function');
+assert.equal(typeof face.canOpenNatively, 'function');
+assert.equal(typeof face.openNatively, 'function');
+// 纯浏览器 profile：没有 remote 服务 → 不支持原生打开（组件据此隐藏那组菜单项）
+assert.equal(await face.canOpenNatively(), false);
+assert.equal(await face.openNatively('/w/a.ts', 'open'), false);
+
+// 桌面宿主：业务面把 session 远程原样接出去
+const openCalls = [];
+const desktopCtx = makeCtx({
+  remote: {
+    session: {
+      canOpenWorkspacePath: async () => ({ ok: true, value: true }),
+      openWorkspacePath: async (request) => {
+        openCalls.push(request);
+        return { ok: true, value: null };
+      }
+    }
+  }
+});
+plugin.apply(desktopCtx.ctx);
+const desktopFace = desktopCtx.state.definitions[0].inject();
+assert.equal(await desktopFace.canOpenNatively(), true);
+assert.equal(await desktopFace.openNatively('/w/dir', 'reveal'), true);
+assert.deepEqual(openCalls, [{ path: '/w/dir', action: 'reveal' }]);
 
 const REFS = [
   { source: 'reference', ref: '@a.ts', label: 'a.ts', appearance: 'file', clipboardText: '@a.ts' },
