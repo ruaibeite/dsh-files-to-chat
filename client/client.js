@@ -360,18 +360,37 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 这台主机能否执行原生打开。`canOpenWorkspacePath()` 无需指定 Session，所以插件
-     * 挂载时问一次即可；桌面宿主之外（纯浏览器）回答 false。
-     * @param session - `remote.session` 命名空间。
-     * @returns 是否具备原生打开能力。
+     * 探测没得出 `yes` 时留一行控制台线索。
+     *
+     * 「打开」那组菜单项消失时，用户和维护者都需要一个能看见的原因；`yes` 是常态，
+     * 不打印，免得每次挂载都刷一行。
+     * @param state - `no` 或 `unknown`。
      */
-    async function canOpenNatively(session) {
-      if (session === undefined || typeof session.canOpenWorkspacePath !== 'function') return false;
+    function reportNative(state) {
+      const logger = globalThis.console;
+      if (logger === undefined || typeof logger.info !== 'function') return;
+      logger.info(`[files-to-chat] native open capability: ${state}`);
+    }
+
+    /**
+     * 探测这台主机能否执行原生打开，**三态**返回。
+     *
+     * 关键在于区分「宿主明确说不能」和「这次没问出来」：早先的版本把两者都当成
+     * 不支持，于是任何一次失败（连接未就绪、服务尚未注册、命名空间暂时缺席）都会让
+     * 「打开」那组菜单项**永久消失**——功能明明在，界面上却再也不出现。现在只有宿主
+     * 成功应答且 `value === false` 才算 `no`；其余一律 `unknown`，而 `unknown` 照样把
+     * 菜单项画出来，点下去是成功还是失败由宿主当场回答。
+     * @param session - `remote.session` 命名空间。
+     * @returns `yes`（宿主明确支持）｜`no`（宿主明确不支持）｜`unknown`（没问出来）。
+     */
+    async function probeNativeOpen(session) {
+      if (session === undefined || session === null || typeof session.canOpenWorkspacePath !== 'function') return 'unknown';
       try {
         const result = await session.canOpenWorkspacePath();
-        return result !== undefined && result !== null && result.ok === true && result.value === true;
+        if (result === undefined || result === null || result.ok !== true) return 'unknown';
+        return result.value === true ? 'yes' : 'no';
       } catch (error) {
-        return false;
+        return 'unknown';
       }
     }
 
@@ -551,7 +570,7 @@ window.__ModuleLoader__.load({
       const t = React.useCallback((key, params) => translate(rawT, key, params), [rawT]);
       const sessionId = props.sessionId;
       const insert = props.insertReferences;
-      const canOpen = props.canOpenNatively;
+      const probe = props.probeNatively;
       const openWithSystem = props.openNatively;
       const cwd = typeof props.absolutePath === 'string' ? props.absolutePath : undefined;
 
@@ -559,30 +578,51 @@ window.__ModuleLoader__.load({
       const [menu, setMenu] = React.useState(null);
       const [toast, setToast] = React.useState(null);
       /**
-       * 这台主机有没有原生打开能力（桌面宿主才有）。
+       * 原生打开能力：`yes` / `no` / `unknown`（见 `probeNativeOpen`）。
        *
-       * `canOpenWorkspacePath()` 不需要 Session，所以挂载时问一次；回答 false
-       * （纯浏览器 profile）就整组隐藏「打开 / 在文件管理器中显示」，而不是给两个
-       * 点了必然失败的菜单项。
+       * 挂载时问一次；还是 `unknown` 的话，每次右键再问一次（不阻塞本次菜单），一旦
+       * 问出结果后续就稳定了。**只有 `no` 才隐藏**那组菜单项——`unknown` 照样画出来，
+       * 点下去是成功还是失败由宿主当场回答，免得探测的一次抖动把功能永久藏掉。
        */
-      const [nativeOpen, setNativeOpen] = React.useState(false);
+      const [nativeOpen, setNativeOpen] = React.useState('unknown');
+      const nativeOpenRef = React.useRef(nativeOpen);
+      nativeOpenRef.current = nativeOpen;
+      const probeNative = React.useCallback(() => {
+        if (typeof probe !== 'function') {
+          setNativeOpen('no');
+          return;
+        }
+        Promise.resolve()
+          .then(() => probe())
+          .then((state) => {
+            const settled = state === 'yes' || state === 'no' ? state : 'unknown';
+            if (settled !== 'yes') reportNative(settled);
+            setNativeOpen(settled);
+          }, () => {
+            reportNative('unknown');
+            setNativeOpen('unknown');
+          });
+      }, [probe]);
       React.useEffect(() => {
-        if (typeof canOpen !== 'function') {
-          setNativeOpen(false);
+        if (typeof probe !== 'function') {
+          setNativeOpen('no');
           return undefined;
         }
         let live = true;
         Promise.resolve()
-          .then(() => canOpen())
-          .then((ok) => {
-            if (live) setNativeOpen(ok === true);
+          .then(() => probe())
+          .then((state) => {
+            const settled = state === 'yes' || state === 'no' ? state : 'unknown';
+            if (settled !== 'yes') reportNative(settled);
+            if (live) setNativeOpen(settled);
           }, () => {
-            if (live) setNativeOpen(false);
+            reportNative('unknown');
+            if (live) setNativeOpen('unknown');
           });
         return () => {
           live = false;
         };
-      }, [canOpen]);
+      }, [probe]);
       const anchorRef = React.useRef(null);
       const menuNodeRef = React.useRef(null);
       const toastTimerRef = React.useRef(null);
@@ -742,7 +782,7 @@ window.__ModuleLoader__.load({
             hint: directory ? t('menu.folder') : t('menu.file'),
             run: () => runInsert(targets)
           });
-        if (nativeOpen && !many && typeof openWithSystem === 'function') {
+        if (nativeOpen !== 'no' && !many && typeof openWithSystem === 'function') {
           items.push({
             id: 'open',
             separatorBefore: true,
@@ -784,6 +824,7 @@ window.__ModuleLoader__.load({
           event.stopPropagation();
           const current = selectionRef.current;
           const targets = current.length > 1 && current.some((item) => item.path === hit.path) ? current : [hit];
+          if (nativeOpenRef.current === 'unknown') probeNative();
           setMenu({ x: event.clientX, y: event.clientY, targets, active: 0 });
         };
 
@@ -877,7 +918,7 @@ window.__ModuleLoader__.load({
           document.removeEventListener('keydown', onKeyDown, true);
           document.removeEventListener('scroll', onScroll, true);
         };
-      }, [activate, hitOf, itemsOf, rowsOf]);
+      }, [activate, hitOf, itemsOf, probeNative, rowsOf]);
 
       const chip = selection.length === 0 ? null : React.createElement('span', {
         className: 'dsh-ftc-chipwrap',
@@ -980,8 +1021,8 @@ window.__ModuleLoader__.load({
       /**
        * 官方 open-in-app 的 session 远程命名空间。`remote` 已声明在 `inject` 里，
        * 所以挂载时服务已在位；这里仍然**每次调用现取**，免得服务被替换后一直用旧的
-       * （也顺手兜住 `remote` 缺失的情形——那时两个函数恒答 false，组件据此隐藏
-       * 「打开」类菜单项，而不是给两个点了必然失败的条目）。
+       * （也顺手兜住 `remote` 暂时缺席的情形：探测会答 `unknown`，菜单项照常出现，
+       * 点下去由宿主当场回答，而不是把功能永久藏掉）。
        */
       const sessionOf = () => openRemote(ctx);
       ctx.slots.inject('sidebar.right.tab.files.actions', () => ctx.slots.register({
@@ -991,7 +1032,7 @@ window.__ModuleLoader__.load({
         locale: NS,
         inject: () => ({
           insertReferences: (sessionId, references, inputActions) => insertReferences(ctx, sessionId, references, inputActions),
-          canOpenNatively: () => canOpenNatively(sessionOf()),
+          probeNatively: () => probeNativeOpen(sessionOf()),
           openNatively: (path, action) => openNatively(sessionOf(), path, action)
         })
       }, FilesToChat));
@@ -1001,7 +1042,7 @@ window.__ModuleLoader__.load({
     exports.inject = inject;
     exports.name = name;
     /** 给 node 侧测试用的纯函数出口（浏览器里无人读它）。 */
-    exports.__test = { pathBasename, relativizeToCwd, formatFileMention, buildReference, buildReferences, interpolate, translate, openRequest, canOpenNatively, openNatively, MODIFIER };
+    exports.__test = { pathBasename, relativizeToCwd, formatFileMention, buildReference, buildReferences, interpolate, translate, openRequest, probeNativeOpen, openNatively, MODIFIER };
     return module.exports;
   }
 });

@@ -40,7 +40,7 @@ const plugin = entry.factory(requireStub);
 assert.equal(typeof plugin.apply, 'function', 'apply 是插件的挂载入口');
 assert.deepEqual(plugin.inject, ['slots', 'remote'], '注入插槽注册表与 remote 服务');
 
-const { pathBasename, relativizeToCwd, formatFileMention, buildReference, buildReferences, interpolate, translate, openRequest, canOpenNatively, openNatively, MODIFIER } = plugin.__test;
+const { pathBasename, relativizeToCwd, formatFileMention, buildReference, buildReferences, interpolate, translate, openRequest, probeNativeOpen, openNatively, MODIFIER } = plugin.__test;
 
 const CWD = '/Users/ruaibeite/Desktop';
 
@@ -130,14 +130,18 @@ assert.deepEqual(openRequest('/w/a.ts', 'open'), { path: '/w/a.ts' });
 assert.deepEqual(openRequest('/w/a.ts', 'reveal'), { path: '/w/a.ts', action: 'reveal' });
 assert.ok(!('action' in openRequest('/w/a.ts', 'open')), 'open 不能带 action 字段');
 
-// 能力探测：只有 {ok:true, value:true} 才算有原生打开能力
+// 能力探测是**三态**：只有宿主成功应答 value:false 才算「明确不支持」。
+// 其余（没有命名空间、调用失败、抛错、信封不完整）都是 unknown —— unknown 照样把
+// 菜单项画出来，否则探测的一次抖动就会把功能永久藏掉（线上就是这么翻车的）。
 await (async () => {
-  assert.equal(await canOpenNatively(undefined), false);
-  assert.equal(await canOpenNatively({}), false);
-  assert.equal(await canOpenNatively({ canOpenWorkspacePath: async () => ({ ok: true, value: true }) }), true);
-  assert.equal(await canOpenNatively({ canOpenWorkspacePath: async () => ({ ok: true, value: false }) }), false);
-  assert.equal(await canOpenNatively({ canOpenWorkspacePath: async () => ({ ok: false, error: {} }) }), false);
-  assert.equal(await canOpenNatively({ canOpenWorkspacePath: async () => { throw new Error('boom'); } }), false);
+  assert.equal(await probeNativeOpen(undefined), 'unknown', '命名空间缺席 ≠ 不支持');
+  assert.equal(await probeNativeOpen({}), 'unknown', '没有该方法 ≠ 不支持');
+  assert.equal(await probeNativeOpen({ canOpenWorkspacePath: async () => ({ ok: true, value: true }) }), 'yes');
+  assert.equal(await probeNativeOpen({ canOpenWorkspacePath: async () => ({ ok: true, value: false }) }), 'no', '明确回答不支持');
+  assert.equal(await probeNativeOpen({ canOpenWorkspacePath: async () => ({ ok: false, error: {} }) }), 'unknown', '调用失败 ≠ 不支持');
+  assert.equal(await probeNativeOpen({ canOpenWorkspacePath: async () => undefined }), 'unknown');
+  assert.equal(await probeNativeOpen({ canOpenWorkspacePath: async () => { throw new Error('boom'); } }), 'unknown');
+  assert.equal(await probeNativeOpen({ canOpenWorkspacePath: async () => true }), 'unknown', '裸布尔不是信封，不能当作回答');
 
   // 执行：请求体必须原样到达宿主，失败（拒绝 / 抛错 / 无能力）一律回答 false
   const seen = [];
@@ -194,10 +198,10 @@ assert.equal(first.state.definitions[0].locale, 'filesToChat');
 assert.equal(typeof first.state.components[0], 'function');
 const face = first.state.definitions[0].inject();
 assert.equal(typeof face.insertReferences, 'function');
-assert.equal(typeof face.canOpenNatively, 'function');
+assert.equal(typeof face.probeNatively, 'function');
 assert.equal(typeof face.openNatively, 'function');
-// 纯浏览器 profile：没有 remote 服务 → 不支持原生打开（组件据此隐藏那组菜单项）
-assert.equal(await face.canOpenNatively(), false);
+// 没有 remote 服务 → unknown：菜单项照常出现，点下去由宿主当场回答
+assert.equal(await face.probeNatively(), 'unknown');
 assert.equal(await face.openNatively('/w/a.ts', 'open'), false);
 
 // 桌面宿主：业务面把 session 远程原样接出去
@@ -215,7 +219,7 @@ const desktopCtx = makeCtx({
 });
 plugin.apply(desktopCtx.ctx);
 const desktopFace = desktopCtx.state.definitions[0].inject();
-assert.equal(await desktopFace.canOpenNatively(), true);
+assert.equal(await desktopFace.probeNatively(), 'yes');
 assert.equal(await desktopFace.openNatively('/w/dir', 'reveal'), true);
 assert.deepEqual(openCalls, [{ path: '/w/dir', action: 'reveal' }]);
 
