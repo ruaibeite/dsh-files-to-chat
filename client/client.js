@@ -727,14 +727,19 @@ window.__ModuleLoader__.load({
         return { path, kind };
       }, [treeRoot]);
 
-      /** 弹出提示条。 */
-      const showToast = React.useCallback((text) => {
+      /**
+       * 弹出提示条。
+       * @param text - 文案。
+       * @param ms - 停留时长。失败提示要更长：里面可能带着宿主的错误码，2.6 秒根本
+       * 来不及读完，读不到就没法定位（默认 2600）。
+       */
+      const showToast = React.useCallback((text, ms = 2600) => {
         setToast({ text, at: Date.now() });
         if (toastTimerRef.current !== null) clearTimeout(toastTimerRef.current);
         toastTimerRef.current = setTimeout(() => {
           toastTimerRef.current = null;
           setToast(null);
-        }, 2600);
+        }, ms);
       }, []);
 
       React.useEffect(() => () => {
@@ -798,8 +803,9 @@ window.__ModuleLoader__.load({
             logger.info('[files-to-chat] open failed:', reason ?? 'unknown', outcome === undefined || outcome === null ? undefined : outcome.raw);
           }
           const base = t(action === 'reveal' ? 'toast.revealFailed' : 'toast.openFailed');
-          // 把宿主的原话一起显示：只说「打开失败」对定位没有帮助
-          showToast(reason === undefined || reason === 'unknown' ? base : `${base}（${reason}）`);
+          // 把宿主的原话一起显示：只说「打开失败」对定位没有帮助。
+          // 失败停留 8 秒——错误码通常挺长，2.6 秒读不完。
+          showToast(reason === undefined || reason === 'unknown' ? base : `${base}（${reason}）`, 8000);
         }
       }, [openWithSystem, showToast, t]);
 

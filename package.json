@@ -1,6 +1,6 @@
 {
   "name": "@ruaibeite/dsh-files-to-chat",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Right-click a file or folder in the DSH right Sidebar file tree to add it to the conversation as an @ reference, with multi-select batch insertion.",
   "license": "MIT",
   "type": "module",
