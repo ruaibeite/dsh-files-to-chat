@@ -345,18 +345,68 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 解析 session 远程命名空间。缺 Remote 服务、或运行在纯浏览器 profile 时返回
-     * undefined —— 调用方据此整组隐藏「打开」类菜单项。
+     * 解析 `remote.session` 命名空间。
+     *
+     * 命名空间在客户端是**点号服务**：运行时把它注册成 `remote.<namespace>`
+     * （`dsh-api-gateway` 客户端半边：`super(ctx, remoteServiceKey(name))`，其中
+     * `remoteServiceKey = (ns) => `remote.${ns}``），因此它挂在 cordis 的服务树上，
+     * 而不是某个服务对象的属性。几种写法**并不等价**：
+     *
+     * - `ctx.get('remote.session')` —— 直接按服务键取，正是它注册时的键；
+     * - `ctx.remote.session` —— ctx 上的属性链，官方插件（ui-open-in-app）就是这么写的；
+     * - `ctx.get('remote').session` —— **不等价**：`remote` 服务本体上并没有 `session`
+     *   属性。线上就是栽在这条上：一路拿到 undefined，最后只报「打开失败（no-remote）」。
+     *
+     * 逐个尝试，并且**必须**确认 `openWorkspacePath` 真是函数才算命中——否则宁可返回
+     * undefined（探测会答 unknown，菜单项照常出现并给出真实原因），也不要拿个空壳
+     * 对象一路失败。
      * @param ctx - 客户端根上下文。
      * @returns `remote.session` 命名空间，或 undefined。
      */
-    function openRemote(ctx) {
-      try {
-        const remote = ctx.get('remote');
-        return remote === undefined || remote === null ? undefined : remote.session;
-      } catch (error) {
-        return undefined;
+    function sessionRemote(ctx) {
+      const candidates = [];
+      const get = (name) => {
+        try {
+          return ctx.get === undefined ? undefined : ctx.get(name);
+        } catch (error) {
+          return undefined;
+        }
+      };
+      const prop = (object, key) => {
+        try {
+          return object === undefined || object === null ? undefined : object[key];
+        } catch (error) {
+          return undefined;
+        }
+      };
+      const dotted = get('remote.session');
+      const remote = get('remote');
+      candidates.push(dotted, prop(prop(ctx, 'remote'), 'session'), prop(remote, 'session'), remote);
+      for (const candidate of candidates) {
+        if (candidate !== undefined && candidate !== null && typeof candidate.openWorkspacePath === 'function') return candidate;
       }
+      reportRemote(dotted, remote, prop(prop(ctx, 'remote'), 'session'));
+      return undefined;
+    }
+
+    /**
+     * 命名空间一个都没命中时，把三个候选的形状打出来。
+     *
+     * 这一行是为了让「no-remote」不再是死胡同：下次再出问题，控制台里直接能看到
+     * 究竟哪种取法拿到了什么。
+     * @param dotted - `ctx.get('remote.session')` 的结果。
+     * @param remote - `ctx.get('remote')` 的结果。
+     * @param chained - `ctx.remote.session` 的结果。
+     */
+    function reportRemote(dotted, remote, chained) {
+      const logger = globalThis.console;
+      if (logger === undefined || typeof logger.info !== 'function') return;
+      const shape = (value) => (value === undefined ? 'undefined' : value === null ? 'null' : typeof value);
+      logger.info('[files-to-chat] remote.session unresolved:', {
+        'get(remote.session)': shape(dotted),
+        'ctx.remote.session': shape(chained),
+        'get(remote)': shape(remote)
+      });
     }
 
     /**
@@ -1063,12 +1113,11 @@ window.__ModuleLoader__.load({
         ctx.effect(() => locale.register(NS, { zh, en }), 'files-to-chat: dictionaries');
       }
       /**
-       * 官方 open-in-app 的 session 远程命名空间。`remote` 已声明在 `inject` 里，
-       * 所以挂载时服务已在位；这里仍然**每次调用现取**，免得服务被替换后一直用旧的
-       * （也顺手兜住 `remote` 暂时缺席的情形：探测会答 `unknown`，菜单项照常出现，
-       * 点下去由宿主当场回答，而不是把功能永久藏掉）。
+       * 官方 open-in-app 的 session 远程命名空间，**每次调用现取**（见 `sessionRemote`）：
+       * 服务可能被替换，取早了就会一直握着旧引用。取不到时探测答 `unknown`、菜单项
+       * 照常出现，点下去由宿主当场回答，而不是把功能永久藏掉。
        */
-      const sessionOf = () => openRemote(ctx);
+      const sessionOf = () => sessionRemote(ctx);
       ctx.slots.inject('sidebar.right.tab.files.actions', () => ctx.slots.register({
         name: 'sidebar.right.tab.files.actions',
         id: 'files-to-chat',
@@ -1086,7 +1135,7 @@ window.__ModuleLoader__.load({
     exports.inject = inject;
     exports.name = name;
     /** 给 node 侧测试用的纯函数出口（浏览器里无人读它）。 */
-    exports.__test = { pathBasename, relativizeToCwd, formatFileMention, buildReference, buildReferences, interpolate, translate, openRequest, probeNativeOpen, openNatively, failureReason, MODIFIER };
+    exports.__test = { pathBasename, relativizeToCwd, formatFileMention, buildReference, buildReferences, interpolate, translate, openRequest, probeNativeOpen, openNatively, failureReason, sessionRemote, MODIFIER };
     return module.exports;
   }
 });

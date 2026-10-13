@@ -40,7 +40,7 @@ const plugin = entry.factory(requireStub);
 assert.equal(typeof plugin.apply, 'function', 'apply 是插件的挂载入口');
 assert.deepEqual(plugin.inject, ['slots', 'remote'], '注入插槽注册表与 remote 服务');
 
-const { pathBasename, relativizeToCwd, formatFileMention, buildReference, buildReferences, interpolate, translate, openRequest, probeNativeOpen, openNatively, failureReason, MODIFIER } = plugin.__test;
+const { pathBasename, relativizeToCwd, formatFileMention, buildReference, buildReferences, interpolate, translate, openRequest, probeNativeOpen, openNatively, failureReason, sessionRemote, MODIFIER } = plugin.__test;
 
 const CWD = '/Users/ruaibeite/Desktop';
 
@@ -182,6 +182,29 @@ await (async () => {
   assert.equal(failureReason({ ok: false, error: {} }), undefined);
   assert.equal(failureReason(Object.assign(new Error('boom'), { code: 'c/d' })), 'c/d: boom');
 })();
+
+// ── sessionRemote：命名空间是点号服务，几种取法并不等价 ─────────────────────
+// 线上教训：ctx.get('remote').session 拿不到东西（remote 服务本体上没有 session
+// 属性），于是「能力探测通过、点击报 no-remote」。这里把每种取法都钉住。
+const NS_OK = { openWorkspacePath: () => {}, canOpenWorkspacePath: () => {} };
+assert.equal(sessionRemote({ get: (n) => (n === 'remote.session' ? NS_OK : undefined) }), NS_OK, '首选：按服务键取 remote.session');
+assert.equal(sessionRemote({ get: () => undefined, remote: { session: NS_OK } }), NS_OK, '其次：ctx.remote.session 属性链');
+{
+  // 只剩旧写法可用时也要能命中（不能再回退到 no-remote）
+  const legacy = { get: (n) => (n === 'remote' ? { session: NS_OK } : undefined) };
+  assert.equal(sessionRemote(legacy), NS_OK, '兼容：get(remote).session');
+}
+{
+  // 方法被直接装在 remote 服务上（假设性兜底）也要认
+  const direct = { get: (n) => (n === 'remote' ? NS_OK : undefined) };
+  assert.equal(sessionRemote(direct), NS_OK, '兜底：remote 本体就带方法');
+}
+// 空壳对象不算命中——宁可 undefined（探测答复 unknown），也不要一路失败到 no-remote
+assert.equal(sessionRemote({ get: () => ({ session: {} }) }), undefined, '空壳不算命中');
+assert.equal(sessionRemote({ get: () => undefined }), undefined);
+assert.equal(sessionRemote({ get: () => { throw new Error('boom'); } }), undefined, 'get 抛错不该炸');
+assert.equal(sessionRemote({}), undefined);
+assert.equal(sessionRemote({ get: () => ({ session: { openWorkspacePath: 'not-a-function' } }) }), undefined);
 
 // ── apply：插槽注册 ─────────────────────────────────────────────────────────
 /** 造一个够用的客户端根上下文；`sessions` / `remote` 按用例注入。 */
