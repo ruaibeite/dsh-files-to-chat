@@ -28,10 +28,11 @@ only clears the selection.
 
 "Open" and "Show in file manager" go through the **official open-in-app host capability** — the
 same `session` remote namespace the official "Open In…" button in the file-tree header uses — so
-the plugin never spawns a shell itself. The capability is probed with `canOpenWorkspacePath()` and
-**the whole group is hidden** where it answers false (a plain browser profile), rather than
-offering two items that are guaranteed to fail. Opening is not offered for a multi-selection:
-launching N applications at once is not a feature.
+the plugin never spawns a shell itself. The `canOpenWorkspacePath()` probe is **tri-state**: the
+group is hidden only when the host explicitly answers "not supported". When the probe cannot
+answer (call failed, malformed envelope, namespace not reachable yet) the items are shown anyway
+and the host answers on click — one flaky probe must not hide a working feature for good. Opening
+is not offered for a multi-selection: launching N applications at once is not a feature.
 
 ## What gets inserted
 
@@ -109,10 +110,10 @@ dsh --profile desktop --dump-config | grep -A2 files-to-chat
   tree or changing session clears it. That is deliberate — it is not the file tree's state and
   no other entry point can mutate it.
 - A folder reference inserts `@dir/` only; it is not expanded into the files underneath.
-- "Open" and "Show in file manager" appear only on a host that can open natively (the desktop
-  app); a plain browser profile hides the whole group. Whether a given path can be opened also
-  depends on the host mapping it to the same canonical process path — a path it cannot map (a
-  remote one, say) is refused, and the plugin reports a failure instead of pretending.
+- "Open" and "Show in file manager" are hidden only when the host explicitly reports that it
+  cannot open natively. Whether a given path can actually be opened also depends on the host
+  mapping it to the same canonical process path — a path it cannot map (a remote one, say) is
+  refused, and the plugin shows the host's own error code instead of pretending.
 - The plugin depends on the official row DOM contract (`data-files-entry` / `data-files-path` /
   `data-files-root`). If DSH renames those attributes the menu silently stops appearing rather
   than doing anything unexpected.
