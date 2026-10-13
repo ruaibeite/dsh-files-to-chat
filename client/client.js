@@ -401,13 +401,42 @@ window.__ModuleLoader__.load({
      * @param action - `open` 或 `reveal`。
      * @returns 宿主是否接受并执行。
      */
+    /**
+     * 把一次失败压缩成一句能读的原因。
+     *
+     * 远程失败有两种形态：**抛出的** `RemoteError`（带 `code` / `message`），以及
+     * **失败信封** `{ ok: false, error: { code, message } }`。两者都要把宿主自己的话
+     * 带出来——「打开失败」四个字对定位毫无帮助，`workspace-file/outside-workspace`
+     * 这种码才指得出问题在哪。
+     * @param value - 抛出的错误或失败信封。
+     * @returns 形如 `code: message` 的原因；拿不到时返回 undefined。
+     */
+    function failureReason(value) {
+      if (value === undefined || value === null) return undefined;
+      const error = value instanceof Error ? value : value.error;
+      const code = typeof value.code === 'string' ? value.code : error !== undefined && error !== null && typeof error.code === 'string' ? error.code : undefined;
+      const message = typeof value.message === 'string' && value.message !== '' ? value.message : error !== undefined && error !== null && typeof error.message === 'string' && error.message !== '' ? error.message : undefined;
+      if (code !== undefined && message !== undefined) return `${code}: ${message}`;
+      if (code !== undefined) return code;
+      if (message !== undefined) return message;
+      return undefined;
+    }
+
+    /**
+     * 执行一次原生打开或在文件管理器中显示。
+     * @param session - `remote.session` 命名空间。
+     * @param path - 目标的绝对路径。
+     * @param action - `open` 或 `reveal`。
+     * @returns `{ ok: true }`，或 `{ ok: false, reason? }`（reason 是宿主的原话）。
+     */
     async function openNatively(session, path, action) {
-      if (session === undefined || typeof session.openWorkspacePath !== 'function') return false;
+      if (session === undefined || typeof session.openWorkspacePath !== 'function') return { ok: false, reason: 'no-remote' };
       try {
         const result = await session.openWorkspacePath(openRequest(path, action));
-        return result !== undefined && result !== null && result.ok === true;
+        if (result !== undefined && result !== null && result.ok === true) return { ok: true };
+        return { ok: false, reason: failureReason(result), raw: result };
       } catch (error) {
-        return false;
+        return { ok: false, reason: failureReason(error), raw: error };
       }
     }
     //#endregion
@@ -432,8 +461,8 @@ window.__ModuleLoader__.load({
       'toast.copied': '输入框正忙，引用已复制到剪贴板',
       'toast.copiedPath': '路径已复制',
       'toast.copiedMany': '已复制 {count} 条路径',
-      'toast.openFailed': '打开失败：这台主机没有可用的原生打开能力',
-      'toast.revealFailed': '无法在文件管理器中显示该路径',
+      'toast.openFailed': '打开失败',
+      'toast.revealFailed': '无法在文件管理器中显示',
       'toast.failed': '添加失败：无法写入输入框',
       'toast.empty': '这些条目无法表示成 @ 引用'
     };
@@ -456,8 +485,8 @@ window.__ModuleLoader__.load({
       'toast.copied': 'Composer is busy — references copied to the clipboard',
       'toast.copiedPath': 'Path copied',
       'toast.copiedMany': 'Copied {count} paths',
-      'toast.openFailed': 'Could not open: this host offers no native opener',
-      'toast.revealFailed': 'Could not show that path in the file manager',
+      'toast.openFailed': 'Could not open',
+      'toast.revealFailed': 'Could not reveal in the file manager',
       'toast.failed': 'Could not write into the composer',
       'toast.empty': 'These entries cannot be written as @ references'
     };
@@ -754,15 +783,24 @@ window.__ModuleLoader__.load({
        */
       const runSystem = React.useCallback(async (target, action) => {
         setMenu(null);
-        let ok = false;
+        let outcome = { ok: false, reason: 'no-remote' };
         if (typeof openWithSystem === 'function') {
           try {
-            ok = (await openWithSystem(target.path, action)) === true;
+            outcome = await openWithSystem(target.path, action);
           } catch (error) {
-            ok = false;
+            outcome = { ok: false, reason: failureReason(error), raw: error };
           }
         }
-        if (!ok) showToast(t(action === 'reveal' ? 'toast.revealFailed' : 'toast.openFailed'));
+        if (outcome === undefined || outcome === null || outcome.ok !== true) {
+          const reason = outcome === undefined || outcome === null ? undefined : outcome.reason;
+          const logger = globalThis.console;
+          if (logger !== undefined && typeof logger.info === 'function') {
+            logger.info('[files-to-chat] open failed:', reason ?? 'unknown', outcome === undefined || outcome === null ? undefined : outcome.raw);
+          }
+          const base = t(action === 'reveal' ? 'toast.revealFailed' : 'toast.openFailed');
+          // 把宿主的原话一起显示：只说「打开失败」对定位没有帮助
+          showToast(reason === undefined || reason === 'unknown' ? base : `${base}（${reason}）`);
+        }
       }, [openWithSystem, showToast, t]);
 
       /**
@@ -1042,7 +1080,7 @@ window.__ModuleLoader__.load({
     exports.inject = inject;
     exports.name = name;
     /** 给 node 侧测试用的纯函数出口（浏览器里无人读它）。 */
-    exports.__test = { pathBasename, relativizeToCwd, formatFileMention, buildReference, buildReferences, interpolate, translate, openRequest, probeNativeOpen, openNatively, MODIFIER };
+    exports.__test = { pathBasename, relativizeToCwd, formatFileMention, buildReference, buildReferences, interpolate, translate, openRequest, probeNativeOpen, openNatively, failureReason, MODIFIER };
     return module.exports;
   }
 });

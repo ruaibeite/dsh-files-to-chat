@@ -40,7 +40,7 @@ const plugin = entry.factory(requireStub);
 assert.equal(typeof plugin.apply, 'function', 'apply 是插件的挂载入口');
 assert.deepEqual(plugin.inject, ['slots', 'remote'], '注入插槽注册表与 remote 服务');
 
-const { pathBasename, relativizeToCwd, formatFileMention, buildReference, buildReferences, interpolate, translate, openRequest, probeNativeOpen, openNatively, MODIFIER } = plugin.__test;
+const { pathBasename, relativizeToCwd, formatFileMention, buildReference, buildReferences, interpolate, translate, openRequest, probeNativeOpen, openNatively, failureReason, MODIFIER } = plugin.__test;
 
 const CWD = '/Users/ruaibeite/Desktop';
 
@@ -143,7 +143,8 @@ await (async () => {
   assert.equal(await probeNativeOpen({ canOpenWorkspacePath: async () => { throw new Error('boom'); } }), 'unknown');
   assert.equal(await probeNativeOpen({ canOpenWorkspacePath: async () => true }), 'unknown', '裸布尔不是信封，不能当作回答');
 
-  // 执行：请求体必须原样到达宿主，失败（拒绝 / 抛错 / 无能力）一律回答 false
+  // 执行：请求体必须原样到达宿主；失败要把**宿主的原话**带回来（只说「打开失败」
+  // 对定位毫无帮助，错误码才指得出问题在哪）
   const seen = [];
   const session = {
     openWorkspacePath: async (request) => {
@@ -151,12 +152,35 @@ await (async () => {
       return { ok: true, value: null };
     }
   };
-  assert.equal(await openNatively(session, '/w/dir', 'reveal'), true);
-  assert.equal(await openNatively(session, '/w/a.ts', 'open'), true);
+  assert.deepEqual(await openNatively(session, '/w/dir', 'reveal'), { ok: true });
+  assert.deepEqual(await openNatively(session, '/w/a.ts', 'open'), { ok: true });
   assert.deepEqual(seen, [{ path: '/w/dir', action: 'reveal' }, { path: '/w/a.ts' }]);
-  assert.equal(await openNatively(undefined, '/w/a.ts', 'open'), false);
-  assert.equal(await openNatively({ openWorkspacePath: async () => ({ ok: false, error: {} }) }, '/w/a.ts', 'open'), false);
-  assert.equal(await openNatively({ openWorkspacePath: async () => { throw new Error('nope'); } }, '/w/a.ts', 'open'), false);
+  assert.deepEqual(await openNatively(undefined, '/w/a.ts', 'open'), { ok: false, reason: 'no-remote' });
+
+  // 失败信封：{ ok:false, error:{ code, message } } → "code: message"
+  const envelope = await openNatively({
+    openWorkspacePath: async () => ({ ok: false, error: { code: 'workspace-file/outside-workspace', message: '路径不在工作区内' } })
+  }, '/w/a.ts', 'open');
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.reason, 'workspace-file/outside-workspace: 路径不在工作区内');
+
+  // 抛出的错误（RemoteError 就长这样）：同样带出 code 与 message
+  const thrown = await openNatively({
+    openWorkspacePath: async () => {
+      const error = new Error('原生启动器拒绝了这个路径');
+      error.code = 'open-in-app/launch-failed';
+      throw error;
+    }
+  }, '/w/a.ts', 'open');
+  assert.equal(thrown.ok, false);
+  assert.equal(thrown.reason, 'open-in-app/launch-failed: 原生启动器拒绝了这个路径');
+
+  // failureReason 的各条分支
+  assert.equal(failureReason(undefined), undefined);
+  assert.equal(failureReason({ code: 'only/code' }), 'only/code');
+  assert.equal(failureReason({ message: '只有消息' }), '只有消息');
+  assert.equal(failureReason({ ok: false, error: {} }), undefined);
+  assert.equal(failureReason(Object.assign(new Error('boom'), { code: 'c/d' })), 'c/d: boom');
 })();
 
 // ── apply：插槽注册 ─────────────────────────────────────────────────────────
@@ -202,7 +226,7 @@ assert.equal(typeof face.probeNatively, 'function');
 assert.equal(typeof face.openNatively, 'function');
 // 没有 remote 服务 → unknown：菜单项照常出现，点下去由宿主当场回答
 assert.equal(await face.probeNatively(), 'unknown');
-assert.equal(await face.openNatively('/w/a.ts', 'open'), false);
+assert.deepEqual(await face.openNatively("/w/a.ts", "open"), { ok: false, reason: "no-remote" });
 
 // 桌面宿主：业务面把 session 远程原样接出去
 const openCalls = [];
@@ -220,7 +244,7 @@ const desktopCtx = makeCtx({
 plugin.apply(desktopCtx.ctx);
 const desktopFace = desktopCtx.state.definitions[0].inject();
 assert.equal(await desktopFace.probeNatively(), 'yes');
-assert.equal(await desktopFace.openNatively('/w/dir', 'reveal'), true);
+assert.deepEqual(await desktopFace.openNatively("/w/dir", "reveal"), { ok: true });
 assert.deepEqual(openCalls, [{ path: '/w/dir', action: 'reveal' }]);
 
 const REFS = [
