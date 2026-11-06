@@ -585,8 +585,8 @@ window.__ModuleLoader__.load({
     //#region 样式
     const CSS = [
       /* 选中行：借用官方行按钮的悬停底色，再加一枚极小的标记点。 */
-      'li[data-files-to-chat-selected="true"] > button{background:var(--dsw-alias-interactive-bg-hover);box-shadow:inset 0 0 0 1px var(--dsw-alias-border-l3)}',
-      'li[data-files-to-chat-selected="true"] > button > span:last-child::after{content:"";display:inline-block;width:6px;height:6px;margin-left:6px;border-radius:50%;background:var(--dsw-alias-label-primary);opacity:.5;vertical-align:middle}',
+      'li[data-files-to-chat-selected="true"] > button,li[data-files-to-chat-selected="true"] > div > button{background:var(--dsw-alias-interactive-bg-hover);box-shadow:inset 0 0 0 1px var(--dsw-alias-border-l3)}',
+      'li[data-files-to-chat-selected="true"] > button > span:last-child::after,li[data-files-to-chat-selected="true"] > div > button > span:last-child::after{content:"";display:inline-block;width:6px;height:6px;margin-left:6px;border-radius:50%;background:var(--dsw-alias-label-primary);opacity:.5;vertical-align:middle}',
       /* 表头上的选中芯片。 */
       '.dsh-ftc-chipwrap{display:inline-flex;flex:none;align-items:center;gap:2px}',
       '.dsh-ftc-chip{display:inline-flex;align-items:center;gap:4px;height:26px;padding:0 8px;border:1px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-sm,6px);background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary);font:inherit;font-size:var(--dsh-content-font-size-secondary,12px);line-height:1;white-space:nowrap;cursor:pointer}',
@@ -711,12 +711,43 @@ window.__ModuleLoader__.load({
       selectionRef.current = selection;
       menuStateRef.current = menu;
 
-      /** 本组件所属的文件树根：表头就在 `[data-files-root]` 里面。 */
+      /**
+       * 本组件所属的文件树根。
+       *
+       * 宿主 0.2.2 起，`sidebar.right.tab.files.actions` 这一行从树内部搬到了
+       * 标签头里（与 `[data-files-content]` 平级），所以「往上找最近的
+       * `[data-files-root]`」会落空：拿不到根 → `hitOf` 一律返回 null →
+       * 右键菜单、多选、插入全都静默失效。这里改成三级回退：
+       *   1. 仍在树内时直接用（旧宿主）；
+       *   2. 逐级往上，找最近一个**包含**树根的祖先，多栏并存时按 cwd 精确匹配；
+       *   3. 最后按 `data-files-root` 的值（就是 cwd）在全文档里找。
+       */
       const treeRoot = React.useCallback(() => {
         const anchor = anchorRef.current;
         if (anchor === null || typeof anchor.closest !== 'function') return null;
-        return anchor.closest('[data-files-root]');
-      }, []);
+        const inside = anchor.closest('[data-files-root]');
+        if (inside !== null) return inside;
+        const pick = (scope) => {
+          const roots = Array.from(scope.querySelectorAll('[data-files-root]'));
+          if (roots.length === 0) return null;
+          if (typeof cwd === 'string' && cwd !== '') {
+            const exact = roots.find((node) => node.getAttribute('data-files-root') === cwd);
+            if (exact !== undefined) return exact;
+          }
+          return roots[0];
+        };
+        let node = anchor.parentElement;
+        for (let depth = 0; node !== null && depth < 12; depth += 1, node = node.parentElement) {
+          const found = pick(node);
+          if (found !== null) return found;
+        }
+        if (typeof cwd === 'string' && cwd !== '' && typeof document !== 'undefined') {
+          for (const candidate of document.querySelectorAll('[data-files-root]')) {
+            if (candidate.getAttribute('data-files-root') === cwd) return candidate;
+          }
+        }
+        return null;
+      }, [cwd]);
 
       /** 当前树里可引用的行（文件与目录）。 */
       const rowsOf = React.useCallback(() => {
